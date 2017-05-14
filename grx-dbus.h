@@ -2,17 +2,14 @@
 #define GRX_DBUS
 #define SERVICE_NAME    "grx.dbus.service"
 #define BASE_DATOS "/var/lib/grx/conexiones.db"
+#define ARP_SCAN "/usr/sbin/arp-scan -q -x -g "
 #include <QtSql/QSqlDatabase>
 #include <QtSql/QSqlQuery>
 #include <QtSql/QSqlError>
 #include <QtCore/QObject>
 #include "QtDebug"
 #include <QDBusVariant>
-
-struct valores{
-    QString a;
-    QString b;
-};
+#include <QProcess>
 
 class GrxArp: public QObject
 {

@@ -5,23 +5,43 @@
 #include "grx-dbus.h"
 #include <QList>
 
-QString GrxArp::busca_equipos(const QString &arg)
+QString buscaEquipos(const QString &arg)
 {
-    QProcess process;
-       process.start("/usr/sbin/arp-scan -q -x -g "+arg);
+       QProcess process;
+       process.start(arg);
        process.waitForFinished(-1);
        return process.readAllStandardOutput();
+}
+
+QList<QVariant> ipsNodos()
+{
+       QString consulta;
+       QList<QVariant> vector;
+       consulta.append("select ip from NODOS");
+       QSqlQuery consultar;
+       if (consultar.exec(consulta)){
+           while (consultar.next()){
+               vector.append(consultar.value(0).toString());
+           }
+       }
+       else{
+           qDebug()<<"Error No se ha podido realizar la consulta "<< consultar.lastError();
+       }
+       return vector;
+}
+
+QString GrxArp::busca_equipos(const QString &arg)
+{
+       return buscaEquipos( ARP_SCAN +arg);
 }
 
 QString GrxArp::busca_equipo_terminados_en(const QString i,const QString &arg )
 {
-    QProcess process;
-       process.start("/usr/sbin/arp-scan -q -x "+arg+" -G "+i);
-       process.waitForFinished(-1);
-       return process.readAllStandardOutput();
+
+    return buscaEquipos( ARP_SCAN + arg + " -G " + i);
 }
 
-QList<QVariant> GrxArp::ips_nodos()
+/*QList<QVariant> GrxArp::ips_nodos()
 {
         QString consulta;
         QList<QVariant> vector;
@@ -37,6 +57,14 @@ QList<QVariant> GrxArp::ips_nodos()
         }
 return vector;
 }
+*/
+
+QList<QVariant> GrxArp::ips_nodos(){
+
+       return ipsNodos();
+}
+
+
 
 QString GrxArp::busca_ips_nodos()
 {
