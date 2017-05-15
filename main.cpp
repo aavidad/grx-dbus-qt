@@ -50,23 +50,16 @@ QString GrxArp::busca_router(const QString &arg)
        return arp_scan( ARP_SCAN + arg);
 }
 
-QString GrxArp::busca_router_muestra_nombre(const QString &nombres)
+QString GrxArp::busca_router_muestra_nombre(const QString &ips)
 {
        QString arp;
-       arp = arp_scan(ARP_SCAN + nombres);
-       qDebug() << arp;
+       arp = arp_scan(ARP_SCAN + ips);
        QStringList nodoList = arp.split('\n');
-       qDebug() << nodoList.;
-       QStringList nodoList2 = arp.split('\n').first().split('\t');
-       qDebug() << nodoList2;
-
-       //QStringList nodoList = arp.split('\n').first().split('\t'); //arp devuelve algo parecido a esto "192.168.1.1\tdd:dd:dd:dd:dd:dd"
-       //if (!nodoList.empty()){
-        //   while (nodoList.)
-       //}
-       //return nodoList.first();//con esto cogemos solo la ip
-       //return arp_scan( ARP_SCAN + arg);
-       return "ok";
+       QString nombre_nodo;
+       for (int i = 0; i < nodoList.size(); ++i){
+           nombre_nodo.append(consulta_nombre(nodoList.value(i).split("\t").first())+" ");
+           }
+return nombre_nodo;
 }
 
 QList<QVariant> GrxArp::ip_nodos(){
