@@ -45,9 +45,9 @@ QString ipsNodosString()
        return vector;
 }
 
-QString GrxArp::busca_router(const QString &arg)
+QString GrxArp::busca_router(const QString &ip)
 {
-       return arp_scan( ARP_SCAN + arg);
+       return arp_scan( ARP_SCAN + ip);
 }
 
 QString GrxArp::crea_conexion (const QString &conexion)
@@ -178,7 +178,6 @@ bool GrxArp::esta_nodo_por_nombre(const QString &nodo)
     QString arp;
     QString ip_nodo;
     ip_nodo = consulta_ip(nodo);
-    qDebug() << ip_nodo;
     arp = arp_scan(ARP_SCAN + ip_nodo);
     QStringList nodoList = arp.split('\n').first().split('\t');
     if (ip_nodo == nodoList.first()){
@@ -186,6 +185,13 @@ bool GrxArp::esta_nodo_por_nombre(const QString &nodo)
     } else {
         return false;
     }
+}
+
+bool GrxArp::esta_veleta(){
+    QProcess process;
+    process.start("ping -c1 -w1 8.8.8.8");
+    process.waitForFinished(-1);
+    return !process.exitCode();
 }
 
 QList<QVariant> GrxArp::consulta_sql_todo(const QString &arg)

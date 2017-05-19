@@ -1,6 +1,7 @@
 #ifndef GRX_DBUS
 #define GRX_DBUS
 #define SERVICE_NAME    "grx.dbus.service"
+#define VELETA "8.8.8.8"
 #define BASE_DATOS "/var/lib/grx/conexiones.db"
 #define ARP_SCAN "/usr/sbin/arp-scan -q -x -g -G 100 "
 #include <QtSql/QSqlDatabase>
@@ -15,7 +16,7 @@ class GrxArp: public QObject
 {
     Q_OBJECT
 public slots:
-    Q_SCRIPTABLE QString busca_router(const QString &arg);
+    Q_SCRIPTABLE QString busca_router(const QString &ip);
     Q_SCRIPTABLE QString busca_router_muestra_nombre(const QString &nombres);
     Q_SCRIPTABLE QList<QVariant> ip_nodos();
     Q_SCRIPTABLE QString ip_nodos_string();
@@ -28,9 +29,13 @@ public slots:
     Q_SCRIPTABLE QString busca_nodo_por_nombre(const QString &nodo);
     Q_SCRIPTABLE bool esta_nodo_por_nombre(const QString &nodo);
     Q_SCRIPTABLE bool esta_nodo_por_ip(const QString &nodo);
+<<<<<<< HEAD
     Q_SCRIPTABLE QString crea_conexion (const QString &conexion);
     Q_SCRIPTABLE QString busca_todos_routers_nombre();
 
+=======
+    Q_SCRIPTABLE bool esta_veleta();
+>>>>>>> 64ab232bd77b0825c969a5fe39c90cbd6319d905
 private:
     QSqlDatabase db;
     QSqlQuery consultar;
