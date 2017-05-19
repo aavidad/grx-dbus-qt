@@ -28,6 +28,8 @@ public slots:
     Q_SCRIPTABLE QString busca_nodo_por_nombre(const QString &nodo);
     Q_SCRIPTABLE bool esta_nodo_por_nombre(const QString &nodo);
     Q_SCRIPTABLE bool esta_nodo_por_ip(const QString &nodo);
+    Q_SCRIPTABLE QString crea_conexion (const QString &conexion);
+    Q_SCRIPTABLE QString busca_todos_routers_nombre();
 
 private:
     QSqlDatabase db;

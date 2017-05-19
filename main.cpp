@@ -50,6 +50,11 @@ QString GrxArp::busca_router(const QString &arg)
        return arp_scan( ARP_SCAN + arg);
 }
 
+QString GrxArp::crea_conexion (const QString &conexion)
+{
+   return "ok";
+}
+
 QString GrxArp::busca_router_muestra_nombre(const QString &ips)
 {
        QString arp;
@@ -70,6 +75,12 @@ QList<QVariant> GrxArp::ip_nodos(){
 QString GrxArp::ip_nodos_string(){
 
     return ipsNodosString();
+
+}
+
+QString GrxArp::busca_todos_routers_nombre()
+{
+       return busca_router_muestra_nombre(busca_todos_routers());
 
 }
 
