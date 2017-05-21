@@ -143,8 +143,6 @@ QString GrxArp::busca_nodo_por_ip(const QString &nodo)
     arp = arp_scan(ARP_SCAN + nodo);
     QStringList nodoList = arp.split('\n').first().split('\t'); //arp devuelve algo parecido a esto "192.168.1.1\tdd:dd:dd:dd:dd:dd"
     return nodoList.first();//con esto cogemos solo la ip
-
-
 }
 
 bool GrxArp::esta_nodo_por_ip(const QString &nodo)
