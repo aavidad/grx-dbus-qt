@@ -11,6 +11,7 @@
 #include "QtDebug"
 #include <QDBusVariant>
 #include <QSqlRecord>
+#include <QDBusMessage>
 
 class GrxArp: public QObject
 {
@@ -29,19 +30,22 @@ public slots:
     Q_SCRIPTABLE QString busca_nodo_por_nombre(const QString &nodo);
     Q_SCRIPTABLE bool esta_nodo_por_nombre(const QString &nodo);
     Q_SCRIPTABLE bool esta_nodo_por_ip(const QString &nodo);
-<<<<<<< HEAD
     Q_SCRIPTABLE QString crea_conexion (const QString &conexion);
     Q_SCRIPTABLE QString busca_todos_routers_nombre();
-
-=======
     Q_SCRIPTABLE bool esta_veleta();
->>>>>>> 64ab232bd77b0825c969a5fe39c90cbd6319d905
+    Q_SCRIPTABLE void temporizador();
+    Q_SCRIPTABLE void mensaje(const QString &mensaje);
+
+signals:
+
+   void senal(const QString &);
+
 private:
     QSqlDatabase db;
     QSqlQuery consultar;
 };
 
-static bool createConnection()
+static bool crea_conexionSQLite()
 {
     QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE");
     db.setDatabaseName(BASE_DATOS);
@@ -52,6 +56,7 @@ static bool createConnection()
 
    return true;
 }
+
 
 
 #endif

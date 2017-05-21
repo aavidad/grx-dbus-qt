@@ -52,7 +52,8 @@ QString GrxArp::busca_router(const QString &ip)
 
 QString GrxArp::crea_conexion (const QString &conexion)
 {
-   return "ok";
+
+   return conexion;
 }
 
 QString GrxArp::busca_router_muestra_nombre(const QString &ips)
@@ -80,7 +81,7 @@ QString GrxArp::ip_nodos_string(){
 
 QString GrxArp::busca_todos_routers_nombre()
 {
-       return busca_router_muestra_nombre(busca_todos_routers());
+       return busca_router_muestra_nombre(ipsNodosString());
 
 }
 
@@ -173,6 +174,10 @@ QString GrxArp::busca_nodo_por_nombre(const QString &nodo)
 
 }
 
+void GrxArp::mensaje(const QString &mensaje){
+    qDebug()<< "ha pasado antes"<< mensaje;
+}
+
 bool GrxArp::esta_nodo_por_nombre(const QString &nodo)
 {
     QString arp;
@@ -191,7 +196,19 @@ bool GrxArp::esta_veleta(){
     QProcess process;
     process.start("ping -c1 -w1 8.8.8.8");
     process.waitForFinished(-1);
+    if (!process.exitCode()){
+        QDBusMessage message = QDBusMessage::createSignal("/",SERVICE_NAME, "senal");
+        message << true;
+        QDBusConnection::systemBus().send(message);
+
+    }
     return !process.exitCode();
+}
+
+void GrxArp::temporizador(){
+    QTimer *timer = new QTimer(this);
+    connect(timer, SIGNAL(timeout()), this, SLOT(esta_veleta()));
+    timer->start(1000);
 }
 
 QList<QVariant> GrxArp::consulta_sql_todo(const QString &arg)
@@ -218,21 +235,22 @@ return vector;
 int main(int argc, char *argv[])
 {
     QCoreApplication a(argc, argv);
-    if (!createConnection()){
+    if (!crea_conexionSQLite()){
         fprintf(stderr, "No puedo conectarme a la base de datos.\n");
         return 1;
         }
     if (!QDBusConnection::systemBus().isConnected()) {
-            fprintf(stderr, "No puedo conectarme al bus de sistema.\n");
+            fprintf(stderr, "No puedo conectarme al bus del sistema.\n");
             return 1;
         }
-        if (!QDBusConnection::systemBus().registerService(SERVICE_NAME)) {
+    if (!QDBusConnection::systemBus().registerService(SERVICE_NAME)) {
             fprintf(stderr, "%s\n",
                     qPrintable(QDBusConnection::systemBus().lastError().message()));
             return 1;
         }
-        GrxArp grx_arp;
-        QDBusConnection::systemBus().registerObject("/", &grx_arp, QDBusConnection::ExportAllSlots);
-
+    GrxArp grx_arp;
+    grx_arp.temporizador();
+    QDBusConnection::systemBus().registerObject("/", &grx_arp, QDBusConnection::ExportAllSlots);
+    QDBusConnection::systemBus().registerObject("/senales", &grx_arp,QDBusConnection::ExportAllSignals);
     return a.exec();
 }
