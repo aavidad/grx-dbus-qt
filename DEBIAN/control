@@ -1,0 +1,9 @@
+Package: grx-konekta
+Priority: standard
+Section: grx
+Maintainer: Diputación Provincial de Granada, Oficina de Software Libre <osl@dipgra.es>
+Architecture: amd64
+Version: 2018.11.23
+Depends:grx-dbus
+Homepage: https://incidencias.dipgra.es/
+Description: Paquete de configuracion de red en Mulhacen

@@ -1,0 +1,586 @@
+#! /bin/bash
+
+# Variables del sistema 
+
+# NM_DISPATCHER_ACTION ; The dispatcher action like "up" or "dhcp4-change", identical to the first command line argument. Since NetworkManager 1.12.0. 
+# CONNECTION_UUID ; The UUID of the connection profile.
+# CONNECTION_ID ; The name (ID) of the connection profile.
+# CONNECTION_DBUS_PATH ; The NetworkManager D-Bus path of the connection.
+# CONNECTION_FILENAME ; The backing file name of the connection profile (if any).
+# CONNECTION_EXTERNAL ; If "1", this indicates that the connection describes a network configuration created outside of NetworkManager.
+# DEVICE_IFACE ; The interface name of the control interface of the device. Depending on the device type, this differs from DEVICE_IP_IFACE. For example for ADSL devices, this could be 'atm0' or for WWAN devices it might be 'ttyUSB0'.
+# DEVICE_IP_IFACE ; The IP interface name of the device. This is the network interface on which IP addresses and routes will be configured.
+# IP4_ADDRESS_N ; The IPv4 address in the format "address/prefix gateway", where N is a number from 0 to (# IPv4 addresses - 1). gateway item in this variable is deprecated, use IP4_GATEWAY instead.
+# IP4_NUM_ADDRESSES ;The variable contains the number of IPv4 addresses the script may expect.
+# IP4_GATEWAY ;The gateway IPv4 address in traditional numbers-and-dots notation.
+# IP4_ROUTE_N ; The IPv4 route in the format "address/prefix next-hop metric", where N is a number from 0 to (# IPv4 routes - 1).
+# IP4_NUM_ROUTES ; The variable contains the number of IPv4 routes the script may expect.
+# IP4_NAMESERVERS ; The variable contains a space-separated list of the DNS servers.
+# IP4_DOMAINS The variable contains a space-separated list of the search domains.
+# DHCP4_<dhcp-option-name> ; If the connection used DHCP for address configuration, the received DHCP configuration is passed in the environment using standard DHCP option names, prefixed with "DHCP4_", like "DHCP4_HOST_NAME=foobar".
+# IP6_<name> and DHCP6_<name> ;The same variables as for IPv4 are available for IPv6, but the prefixes are IP6_ and DHCP6_ instead.
+# CONNECTIVITY_STATE ; The network connectivity state, which can take the values defined by the NMConnectivityState type, from the org.freedesktop.NetworkManager D-Bus API: unknown, none, portal, limited or full. Note: this variable will only be set for connectivity-change actions. 
+
+#Inicializamos variables.
+RUTA="/etc/NetworkManager/system-connections/"
+ROUTER=".254"
+IP=0
+DNS1="10.1.1.60"
+DNS2="10.1.1.91"
+ARRAY_IP=""
+CONTADOR=0
+DB_CONEXIONES="/var/lib/grx/grx.sqlite" #DB con los datos ip para comprobar
+TMP_CON=$(mktemp)
+DIR_IP=$(sqlite3 /var/lib/grx/grx.sqlite "select ipLinea from nodo;")
+IFACE=$1  # en las nuevas versiones ya no es eth0...
+RANGO=20-200 # Rango de ip's a buscar
+TIEMPO=50 #Tiempo de time out para arpscan en milisegundos; con 50 suele ser válido
+LOG="/var/log/grx/grx-konekta.log"
+LOCK="/tmp/$IFACE-konekta.lock"
+
+#Esta funcion busca una ip libre en la red del router que se le pasa por parametro
+#La busqueda esta acotada a las ips comprendidas en el rango que se le pasa como primer parametro
+#Pasamos como primer parametro el rango de busqueda (1-254)
+#Como segundo parametro la ip del router 
+#Devuelve una ip libre (solo el ultimo octeto)
+#devuelve 0 si la ip de red no es valida o estan todas las ip ocupadas
+function ip_libre () {
+    echo "Funcion ip_libre" &>> $LOG
+    local ip=0
+    local RED
+    local RANGO=$1
+    local menor=$(echo $RANGO | cut -d"-" -f1)
+    local mayor=$(echo $RANGO | cut -d"-" -f2)
+    local lista=() #Lista que contiene las ip ya buscadas para no repetir la busqueda
+    local tmp=20 # 20 es el valor que devuelve arp-scan si la ip está ocupada
+    local posibles_ip=`expr $mayor - $menor + 1`
+    local contador=1 # Guarda el numero de busquedas que hemos hecho
+
+    if (valid_ip $2);then    
+        RED=$(echo $2 |cut -d'.' -f1).$(echo $2 |cut -d'.' -f2).$(echo $2 |cut -d'.' -f3). 
+        while [ $tmp -eq 20 ]; do
+            ip=`shuf -i$RANGO -n1` # ip tiene un numero aleatorio comprendido entre RANGO
+            res=$(echo  ${lista[@]} |grep $ip) # si res esta vacio, ip no esta en la lista.
+            if [[ -z $res ]]
+            then
+                if [[ $contador -lt $posibles_ip ]]
+                    then 
+                        lista=( "${lista[@]}" "$ip" )
+                        echo "Comprobando si esta usada: $RED$ip" &>> $LOG
+                        arp-scan -I $IFACE -x -g -G 215 -t$TIEMPO $RED$ip > /dev/null
+                        tmp=$?
+                        if [[ $tmp -eq "0" ]]; then 
+                            echo "La ip $RED$ip esta libre" &>> $LOG
+                        fi
+                        let contador=$contador+1
+                        
+                    else
+                        echo "Todas las ips estan usadas salimos de la funcion" &>> $LOG
+                        return 0
+                fi
+            fi
+        done
+    else
+        echo "ip no valida" &>> $LOG
+        return 0
+    fi
+return $ip
+}
+
+#-------------------------------------------------------------------------------------------
+#Como parametro pasamos la ip de red en el formato p.ejem.  192.168.1.0 (ojo termina en punto . )
+#-------------------------------------------------------------------------------------------
+function ip_red_valida()
+{
+local  ip=$1
+local  stat=1
+
+if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.0$ ]]; then
+OIFS=$IFS
+IFS='.'  
+ip=($ip) 
+IFS=$OIFS
+[[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+&& ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+stat=$?
+fi
+return $stat
+}
+
+#-------------------------------------
+#Devuelve 1 si la ip pasada como parametro esta ocupada o la ip no es valida, 0 si no
+#-------------------------------------
+function ip_ocupada () {
+echo "Funcion ip_ocupada $1" &>> $LOG
+if (valid_ip $1)
+then 
+    arp-scan -I $IFACE -x -g -G 187 -t$TIEMPO $1 > /dev/null 
+    if [ $? -eq 20 ]
+        then
+        return 1
+    else
+        return 0
+    fi
+fi
+return 1
+}
+
+
+#------------------------------------------------------------
+# Comprueba si lo que pasamos como parametro es una ip valida
+#------------------------------------------------------------
+function valid_ip(){
+echo "Funcion valid_ip $1" &>> $LOG
+local  ip=$1
+local  stat=1
+
+if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+OIFS=$IFS
+IFS='.'  
+ip=($ip) 
+IFS=$OIFS
+[[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+&& ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+stat=$?
+fi
+return $stat
+}
+
+
+#------------------------------------------------------------
+# Comprueba si lo que pasamos como parametro es una mascara valida;
+#------------------------------------------------------------
+function valid_mask_cdr(){
+echo "Funcion valid_mask $1" &>> $LOG
+if (( $1 > 0 )) && (( $1 < 33 )); then return 0;fi
+return 1
+}
+
+#------------------------
+# Se le pasa como parametro una ip valida y devuelve su entero correspondiente
+function ip2int()
+{
+    local a b c d
+    { IFS=. read a b c d; } <<< $1
+    echo $(((((((a << 8) | b) << 8) | c) << 8) | d))
+}
+
+#-----------------------
+# Se le pasa un entero de red y devuelve una ipv4
+function int2ip()
+{
+    local ui32=$1; shift
+    local ip n
+    for n in 1 2 3 4; do
+        ip=$((ui32 & 0xff))${ip:+.}$ip
+        ui32=$((ui32 >> 8))
+    done
+    echo $ip
+}
+
+#---------------------------
+# Se le pasa un entero de 0-32 y devuelve la máscara en formato ipv4
+# netmask 24 devuelve 255.255.255.0
+function netmask()
+{
+    local mask=$((0xffffffff << (32 - $1))); shift
+    int2ip $mask
+}
+
+#---------------------------
+# Se le pasa una ip y un entero de 0-32 y devuelve la direccion de broadcast en formato ipv4
+# broadcast 192.168.1.1 16 devuelve 192.168.255.255
+function broadcast()
+{
+    local addr=$(ip2int $1); shift
+    local mask=$((0xffffffff << (32 -$1))); shift
+    int2ip $((addr | ~mask))
+}
+
+#-----------------------------
+# Convierte en formato cdr una mascara del tipo 255...
+function mask2cdr ()
+{
+   # Asumimos que no hay un "255." despues de un valor menor de 255 en la mascara. p.e. 255.0.255.0
+   local x=${1##*255.}
+   set -- 0^^^128^192^224^240^248^252^254^ $(( (${#1} - ${#x})*2 )) ${x%%.*}
+   x=${1%%$3*}
+   echo $(( $2 + (${#x}/4) ))
+}
+
+#--------------------------------
+#Convierte una mascara en formato cdr en una del tipo p.e. 255.255.0.0
+function cdr2mask ()
+{
+   set -- $(( 5 - ($1 / 8) )) 255 255 255 255 $(( (255 << (8 - ($1 % 8))) & 255 )) 0 0 0
+   [ $1 -gt 1 ] && shift $1 || shift
+   echo ${1-0}.${2-0}.${3-0}.${4-0}
+}
+
+#---------------------------
+# Se le pasa una ip y su mascara y devuelve la direccion de red
+# network 192.168.8.1 16 devuelve 192.168.0.0
+
+function network()
+{
+    local addr=$(ip2int $1); shift
+    local mask=$((0xffffffff << (32 -$1))); shift
+    int2ip $((addr & mask))
+}
+
+#------------------------------------------------------------
+# Comprueba que la ip/mask y el router estan en la misma red
+# El primer parametro es la ip, el segundo la mascara y el tercero la ip del router
+# Devuelve 0 si el router esta dentro de la red 1 si no
+#------------------------------------------------------------
+
+function valid_red(){
+echo "Funcion valid_red ip $1 mask $3 router $2" &>> $LOG
+local ip=$1
+local router=$2
+local mask=$3
+local red
+
+if (valid_ip $ip);then echo "la ip $ip es valida" &>> $LOG;else echo "la ip $ip NO es valida";fi
+if (valid_ip $router);then echo "ip del router $router es valida" &>> $LOG;else echo "la ip del ROUTER $router NO es valida";fi
+if (valid_mask_cdr $mask);then echo "la mascara $mask es valida" &>> $LOG;else echo "la mascara $mask NO es valida";fi
+
+if (valid_ip $ip) && (valid_ip $router) && (valid_mask_cdr $mask);then 
+    #tmp_mask=$(mask2cdr $mask) Si las mascara es del tipo 255.255.255.255 debemos usar esto
+    red=$(network $ip $mask) #Direccion de red
+    brd=$(broadcast $ip $mask) #Direccion broadcast    
+    red_int=$(ip2int $red) #Direccion de red en formato entero; lo usamos para operar
+    brd_int=$(ip2int $brd)  #Direccion de broadcast en formato entero; lo usamos para operar  
+    router_int=$(ip2int $router) #Direccion del router en formato entero; lo usamos para operar
+   
+    if (($router_int < $brd_int )) && (($router_int > $red_int )) 
+    then 
+        return 0 # El router esta en la red (ip/mask)
+    fi
+else 
+	echo "La ip, la mascara o la ip del router no son validas" &>> $LOG
+fi
+return 1
+
+}
+
+#--------------------------------------------------------------------
+# Esta funcion busca en los archivos de conexion de NM 
+# Extrae la ip de todos los archivos y si alguno nos vale lo aplica
+# Devuelve 0 si ha encontrado una conexion valida, 1 si no.
+# $1: nombre del archivo NM
+#--------------------------------------------------------------------
+function conexion(){
+echo "Funcion conexion" &>> $LOG
+CON=`ls $RUTA`
+echo "Buscamos en los archivos existentes de NM " &>> $LOG
+
+IFS=',' read -r -a array <<< `ls -F  --format=commas $RUTA`
+let tmp_conta=${#array[@]}-1
+
+local tmp_ip
+for i in $(seq 0 $tmp_conta)
+	do 
+         echo "Buscando en el archivo ${array[$i]}" &>> $LOG
+                 
+         cadena=$(echo ${array[$i]} | sed 's/^[[:space:]]*//') #Quitamos los espacios al principio
+         #ROUTER=$(grep address1 $RUTA"$cadena" 2>/dev/null |cut -f2 -d",") otra forma de hacerlo
+         #IP=$(grep address1 $RUTA"$cadena" 2>/dev/null |cut -f1 -d","|cut -f2 -d"="|cut -f1 -d"/")
+         #METODO=$(nmcli con show "$cadena" |grep  ipv4.method | cut -f2 -d ":"| sed 's/^[[:space:]]*//') #para saber si se conecta de forma manual o automatica (dhcp)
+         
+         MASK=$(nmcli con show "$cadena" |grep  ipv4.addresses: | cut -f2 -d ":" | sed -n 1p | sed 's/^[[:space:]]*//'| cut -f1 -d ","|cut -f2 -d"/")
+         ROUTER=$(nmcli con show "$cadena" |grep  ipv4.gateway: | cut -f2 -d ":" | sed -n 1p | sed 's/^[[:space:]]*//'| cut -f1 -d ","|cut -f2 -d"/")
+         #MASK=$(nmcli con show "$cadena" |grep  ipv4.addresses: | cut -f2 -d ":"| sed 's/^[[:space:]]*//'|cut -f2 -d"/")
+         #ROUTER=$(nmcli con show "$cadena" |grep  ipv4.gateway | cut -f2 -d ":"| sed 's/^[[:space:]]*//')
+         RUTAS=$(nmcli con show "$cadena" |grep  ipv4.routes: | cut -f2 -d ":"| sed 's/^[[:space:]]*//')
+         if [ "$ROUTER" == "--" ] && [ ! -z "$RUTAS" ] # nmcli devuelve -- si esta vacio. Si el gateway es -- y RUTAS no esta vacio es porque hay multiples rutas. Ponemos el primer gateway que encontramos
+            then 
+                 ROUTER=$(nmcli con show "$cadena" |grep ipv4.routes | sed -n 1p | cut -f2 -d ":"| sed 's/^[[:space:]]*//' |cut -d";" -f1|cut -d "," -f2 | cut -d "=" -f2 | sed 's/^[[:space:]]*//' | sed 's/}//')
+         fi         
+         IP=$(nmcli con show "$cadena" |grep  ipv4.addresses: | cut -f2 -d ":"|  sed -n 1p | sed 's/^[[:space:]]*//'|cut -f1 -d"/")
+         RED=$(echo $ROUTER |cut -d'.' -f1).$(echo $ROUTER |cut -d'.' -f2).$(echo $ROUTER |cut -d'.' -f3).
+	     
+         echo "Datos IP $IP, ROUTER $ROUTER, Mask $MASK, Conexion $cadena" &>> $LOG
+         if (valid_red $IP $ROUTER $MASK)
+             then 
+                 echo "Datos ROUTER $ROUTER ; IP:$IP ; Conexion $cadena" &>> $LOG
+                 arp-scan -I $IFACE -x -g -G 187 -t$TIEMPO $ROUTER 2> /dev/null 
+                 if [ $? -eq 20 ]
+                     then
+                         echo "Exito en la busqueda "$cadena" encontrado, comprobamos que la ip $IP no esté en uso" &>> $LOG
+                         ip_ocupada $IP
+                         if [ $? -eq "0" ];then 
+                                 echo "Activamos "$cadena"" &>> $LOG
+                                 nmcli c up id "$cadena" &>> $LOG
+                         else    
+                                 echo "ip $IP ocupada, buscando una ip libre" &>> $LOG
+                                 ip_libre $RANGO $ROUTER
+                                 tmp_ip=$?
+                                 if [ $tmp_ip -eq "0" ]; then 
+                                     echo "No se han encontrado ip_libres en la red" &>> $LOG
+                                 else
+                                     echo "Modificamos "$cadena" con la ip  $RED$tmp_ip/$MASK" &>> $LOG
+                                     nmcli con mod "$cadena" ipv4.addresses $RED$tmp_ip/$MASK #Se ha detectado conflicto de ip's, se cambia la ip de la conexion
+                                     echo "Activamos $cadena" &>> $LOG
+                                     nmcli c up id "$cadena" &>> $LOG
+                                 fi
+                         fi
+                         sleep 4
+                         conectado_router $ROUTER $IFACE #Hace un ping al router por la tarjeta activada.
+                         if [ $? -eq "0" ]
+                         then 
+                             echo "Hay ping al router $ROUTER por la interface $IFACE" &>> $LOG
+                             return 0
+                         else
+                             echo "NO hay ping al router $ROUTER por la interface $IFACE" &>> $LOG
+                         fi
+                 fi
+         fi
+	done
+return 1
+}
+
+#------------------------------------------------------------------------
+# devuelve 0 si hay ping a internet, mulhacen o router local, 1 si no hay
+#------------------------------------------------------------------------
+function conectado(){
+
+   echo "Funcion conectado" &>> $LOG
+   #IP=$(ip addr | awk '/^[0-9]+/ { currentinterface=$2 } $1 == "inet" { split( $2, foo, "/" ); print currentinterface ,foo[1] }' |grep $IFACE |cut -d":" -f2 | sed 's/^[[:space:]]*//')
+   #IP_NETMASK=$(ip addr | awk '/^[0-9]+/ { currentinterface=$2 } $1 == "inet" { split( $2, foo, "/" ); print currentinterface ,foo[2] }' |grep $IFACE |cut -d":" -f2 | sed 's/^[[:space:]]*//')
+   #ROUTER=$(ip route |grep $IFACE| awk '/default/ { print $3 }')
+   #if [ -z "$ROUTER" ]; then tmp=$(ip route |grep $IFACE | awk '{ print $3 }'); ROUTER=$(echo $tmp |cut -d " " -f1);fi
+   IP=$(echo $IP4_ADDRESS_0 | cut -d " " -f1 |cut -d "/" -f1)
+   IP_NETMASK=$(echo $IP4_ADDRESS_0 | cut -d " " -f1 |cut -d "/" -f2)
+   ROUTER=$IP4_GATEWAY
+   if [ -z "$ROUTER" ]; then ROUTER=$(echo $IP4_ROUTE_0 |cut -d " " -f1);fi
+   if [[ "$ROUTER" == "0.0.0.0" ]]
+   then 
+        if [ ! -z "$IP4_ROUTE_0" ] # 
+            then 
+                 ROUTER=$(echo  $IP4_ROUTE_0 |cut -f1 -d " "| cut -d"/" -f1 )
+        else 
+            return 1
+        fi
+   fi 
+   RED=$(echo $ROUTER |cut -d'.' -f1).$(echo $ROUTER |cut -d'.' -f2).$(echo $ROUTER |cut -d'.' -f3).
+   echo "Conectado router: $ROUTER"  &>> $LOG
+   echo "Conectado IP: $IP"  &>> $LOG
+   echo "Conectado IP_NETMASK: $IP_NETMASK"  &>> $LOG
+   if (ping -I$IFACE -q -c1 -W1 "$ROUTER" &>> $LOG) || (ping -I$IFACE -q -c1 -W1 8.8.8.8 &>> $LOG) || (ping -I$IFACE -q -c1 -W1 10.1.1.50 &>> $LOG); then #hacemos ping pero comprobamos que no este usada la ip
+      ip_ocupada $IP
+      if [ $? -eq "0" ];then 
+                echo "Ip libre, estamos usando $IP"  &>> $LOG
+      else    
+                echo "La ip $IP esta ocupada, buscando una ip libre" &>> $LOG
+                ip_libre $RANGO $ROUTER
+                tmp_ip=$?
+                if [ $tmp_ip -eq "0" ]; then 
+                    echo "No se han encontrado ip_libres en la red, OJO seguimos usando una ip ocupada" &>> $LOG
+                else
+                    echo "Aplicamos la ip $RED$tmp_ip sin modificar la conexion" &>> $LOG
+                    ip addr del dev "$IFACE" "$IP/$IP_NETMASK"
+                    ip addr add dev "$IFACE" "$RED$tmp_ip/$IP_NETMASK"
+                fi
+      fi
+      return 0
+   
+   fi     
+return 1
+}
+
+#------------------------------------------------------${ARRAY_IP[@]}------------------
+# devuelve 0 si hay ping al router por la interface pasada por parametro, 1 si no hay
+#------------------------------------------------------------------------
+function conectado_router(){
+    echo "Funcion conectado_router " &>> $LOG
+    local ip=$1
+    local interface=$2
+    if (ping -q -c1 -W1 $ip -I$interface &>> $LOG); then return 0; fi
+return 1
+}
+
+
+#----------------------------------------------------
+#Crea una conexion para NetworManager y la activa
+#
+#----------------------------------------------------
+
+function crea_archivo(){
+    echo "Funcion crea_archivo $2" &>> $LOG
+    local ARRAY
+    if [[ -n $2 ]] && [[ -n ${ARRAY_IP[@]} ]];then #Si ARRAY esta vacio no tenemos datos para crear el archivo
+        IPES=""
+        CON=$(($CONTADOR - 1))
+    
+        for i in $(seq 0 $CON)
+        do
+            IPES=("${IPES[@]}" "ip4" "${ARRAY_IP[$i*7+3]}/24")
+        done
+        local ROUTER=${ARRAY_IP[4]}
+        nmcli con add con-name "$2" type ethernet ifname $IFACE ${IPES[@]} gw4  ${ARRAY_IP[4]} ;nmcli con mod $2 ipv4.dns "$5,$6" +ipv4.dns-search "grx"
+        echo "Creado el archivo $2 $ROUTER ${IPES[@]}" &>> $LOG
+        nmcli c up id $2
+        #sleep 4
+        conectado_router $ROUTER $IFACE #Hace un ping al router por la tarjeta activada.
+        if [ $? -eq "0" ]
+        then 
+            echo "Hay ping al router $ROUTER por la interface $IFACE" &>> $LOG
+            return 0
+        else
+            echo "NO hay ping al router $ROUTER por la interface $IFACE" &>> $LOG
+        fi
+    else 
+        echo "No se han pasado datos a la funcion para crear la conexion; Array:${ARRAY_IP[@]}" &>> $LOG
+    fi
+return 1
+}
+
+#----------------------------------------------------
+# Esta funcion busca todas las ip's de la DB almacenada en $DB_CONEXIONES
+# y llama a la funcion crea_archivo para crear 
+# los archivos de conexion de NM con estos datos.
+# Devuelve 1 en caso de error o si no ha encontrado nada, 0 si ha encontrado un router o lo ha creado con existo
+#----------------------------------------------------
+function sin_ping(){
+    echo "Funcion sin_ping" &>> $LOG
+    local IP_LIBRE
+    local TMP=1
+    local TIEMPO_LOCAL=$TIEMPO
+    local CONTADOR=0
+    local lista=() #Lista que contiene las ip ya buscadas para no repetir la busqueda
+    
+    echo "Listado de ips que vamos a buscar" $DIR_IP &>> $LOG
+    if [ -n "$DIR_IP"  ]
+    then 
+        while [ $CONTADOR -eq 0 ] && (( $TMP < 8 )); do #si no encuentra nada probamos 7 veces subiendo los tiempos de timeout por si es un problema de red
+            echo "Buscando router $TMP veces con un timeout de " $TIEMPO_LOCAL &>> $LOG
+            IPS=$( arp-scan -onliip -I $IFACE -G 187 -t$TIEMPO_LOCAL $DIR_IP |sort |uniq )   #En IPS tenemos las ips de los router que han respondido a arp-scan, quitando posibles repeticiones
+            echo "Lista de ips que han contestado a arp-scan: $IPS" &>> $LOG
+            CONTADOR=$(echo $IPS|wc -w) #Tenemos el numero de ips encontradas
+            let TMP=$TMP+1 
+            let TIEMPO_LOCAL=$TIEMPO_LOCAL+$TIEMPO_LOCAL
+        done
+        
+    else
+        echo "No hemos encontrado ninguna ip en la DB, compruebe la Base de datos\nSalimos de la aplicacion" &>> $LOG 
+        exit 0
+    fi
+    case $CONTADOR in
+        0)
+            echo "No se han encontrado redes" &>> $LOG
+            return 1 #si no ha encontrado ninguna salimos
+            ;;
+
+        *)
+            for ip in $IPS 
+            do
+                 if (valid_ip $ip);then
+                    ip_libre $RANGO $ip  # Buscamos una ip libre en la red de $ip con el rango de busqueda
+                    IP_LIBRE=$? #en IP_LIBRE vamos a tener una ip libre o 0 si no se ha encontrado
+                    if [[ $IP_LIBRE -ne "0" ]];then # si IP_LIBRE es cero es porque o no ha encontrado ip's libres o la ip pasada es erronea
+                        echo "Ip libre encontrada:" $IP_LIBRE &>> $LOG
+                        LINEA=$(sqlite3 $DB_CONEXIONES "select DISTINCT nombre,DNS1,DNS2,PROXY from DATOS_IP where ROUTER like '$ip';"|sed -n 1p) #Solo creamos la primera ocurrencia. Si hay varios centros con la misma ip cogemos la primera.
+                        NOMBRE=$(echo $LINEA | cut -d "|" -f1); echo "Nombre:" $NOMBRE &>> $LOG  #Nombre de la conexion
+                        IP=$(echo $ip |cut -d'.' -f1).$(echo $ip |cut -d'.' -f2).$(echo $ip |cut -d'.' -f3).$IP_LIBRE; echo "Ip:" $IP &>> $LOG 
+                        ROUTER="$ip" ; echo "Router:" $ROUTER &>> $LOG 
+                        DNS1=$(echo $LINEA | cut -d "|" -f2);echo "DNS1:" $DNS1 &>> $LOG 
+                        DNS2=$(echo $LINEA | cut -d "|" -f3); echo "DNS2:" $DNS2 &>> $LOG 
+                        PROXY=$(echo $LINEA | cut -d "|" -f4);echo "Proxy:" $PROXY &>> $LOG 
+                        ARRAY_IP=("${ARRAY_IP[@]}" "TRUE" "$NOMBRE" "$IP" "$ROUTER" "$DNS1" "$DNS2" "$PROXY"); echo "Array:" ${ARRAY_IP[@]} &>> $LOG
+                    else
+                        echo "No hay ips libres en el rango buscado o la ip: $ip esta mal formada.\nSalimos" $IP_LIBRE &>> $LOG 
+                        return 1
+                    fi
+                 fi
+            done 
+            if [ -f $RUTA$NOMBRE ]; then   #Si existe la conexion 
+                nmcli c up id $NOMBRE        #la activa
+                echo activamos $NOMBRE &>> $LOG
+                conectado_router $ROUTER $IFACE #Hace un ping al router por la tarjeta activada.
+                if [ $? -eq "0" ]
+                then 
+                    echo "Hay ping al router $ROUTER por la interface $IFACE" &>> $LOG
+                    return 0
+                else
+                    echo "NO hay ping al router $ROUTER por la interface $IFACE" &>> $LOG
+                fi
+                #sleep 4;
+            else	   		 #si no existe
+                crea_archivo ${ARRAY_IP[@]}  #la crea con las redes encontradas
+                return $?
+            fi
+            ;;
+    esac
+return 1
+}    
+
+
+#------------------------------------------
+#-----------------MAIN---------------------
+#------------------------------------------
+if [ -f $LOCK ]; then
+	echo "Ya existe un archivo lock salimos" &>> $LOG
+	exit;
+fi
+if [ "$IFACE" = "lo" ] || [ -z "$IFACE" ] || [ $2 != "up" ];  then exit;fi 
+
+#laptop-detect #descomenta estas lineas si quieres que los fijos no busquen redes
+#if [ $? == 1  ]; then 
+#	echo "Es un fijo, no hacemos nada" >> $LOG
+#	exit
+#fi
+echo "----------------------`date`--------------------" &>> $LOG
+echo "Ejecutado main" &>> $LOG
+echo "Ejecutamos  konekta en la interface:$IFACE, Accion:$2"  >> $LOG
+# echo $NM_DISPATCHER_ACTION >> $LOG
+# echo $CONNECTION_UUID >> $LOG
+# echo $CONNECTION_ID>> $LOG
+# echo $CONNECTION_DBUS_PATH>> $LOG
+# echo $CONNECTION_FILENAME>> $LOG
+# echo $CONNECTION_EXTERNAL>> $LOG
+# echo $DEVICE_IFACE>> $LOG
+# echo $DEVICE_IP_IFACE>> $LOG
+# echo $IP4_ADDRESS_0>> $LOG
+# echo $IP4_NUM_ADDRESSES>> $LOG
+# echo $IP4_GATEWAY>> $LOG
+# echo $IP4_ROUTE_0>> $LOG
+# echo $IP4_NUM_ROUTES>> $LOG
+# echo $IP4_NAMESERVERS>> $LOG
+# echo IP4_DOMAINS $IP4_DOMAINS>> $LOG
+# echo CONNECTIVITY_STATE $CONNECTIVITY_STATE >> $LOG  
+
+
+if ( set -o noclobber; echo "$$" > "$LOCK") 2> /dev/null;
+then 
+	trap 'rm -f "$LOCK"; exit $?' INT TERM EXIT #Evitamos ejecutar varias instancias a la vez del script
+	if (conectado)
+	then
+		echo "Ejecutado conectado CON exito, salimos" &>> $LOG
+		
+	else
+		echo "Ejecutado conectado SIN exito, ejecutamos la funcion conexion" &>> $LOG
+	        conexion #Conexion busca en los archivos de nm y los prueba, antes de crear uno
+		    if [ $? -eq "0" ]
+            then 
+               echo "Conexion se ha ejecutado con exito" &>> $LOG
+            else
+               if (conectado) then
+                    echo "Ejecutado conectado por segunda vez, esta vez con exito" &>> $LOG
+                else
+                    echo "Ejecutado conectado por segunda vez, sin exito. Ejecutamos sin_ping" &>> $LOG
+                    sin_ping
+                    if [ $? -eq "0" ]
+                    then 
+                        echo "sin_ping correcto" &>> $LOG
+                    else
+                        echo "sin_ping NO ha encontrado nada" &>> $LOG
+                    fi
+	      	   fi	      		
+		    fi
+	fi
+	
+	rm -f "$LOCK"
+	trap - INT TERM EXIT
+fi
+exit

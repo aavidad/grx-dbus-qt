@@ -1,0 +1,16 @@
+#!/bin/bash
+
+LOG=/var/log/grx-konekta-install.log
+if [ -f /usr/lib/x86_64-linux-gnu/libpcap.so.1.8.1 ] 
+	then
+		if [ -f /usr/lib/x86_64-linux-gnu/libpcap.so.1 ]
+			 then echo "Ya existe un enlace al archivo libpcap.so.1" >>$LOG
+		else
+			ln -s /usr/lib/x86_64-linux-gnu/libpcap.so.1.8.1 /usr/lib/x86_64-linux-gnu/libpcap.so.1
+			echo "Creado el enlace al archivo libpcap.so.1"  >>$LOG
+		fi
+fi
+echo "Konekta-common instalado" >>$LOG
+
+
+
